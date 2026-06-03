@@ -71,8 +71,12 @@ func main() {
 			if err != nil {
 				platformType = ""
 			}
+			blockExternalDNS, err := cmd.Flags().GetBool("block-external-dns")
+			if err != nil {
+				blockExternalDNS = false
+			}
 
-			return monitor.CorednsWatch(args[0], clusterConfigPath, args[1], args[2], apiVips, ingressVips, checkInterval, cloudExtLBIPs, cloudIntLBIPs, cloudIngressLBIPs, platformType)
+			return monitor.CorednsWatch(args[0], clusterConfigPath, args[1], args[2], apiVips, ingressVips, checkInterval, cloudExtLBIPs, cloudIntLBIPs, cloudIngressLBIPs, platformType, blockExternalDNS)
 		},
 	}
 	rootCmd.PersistentFlags().StringP("cluster-config", "c", "", "Path to cluster-config ConfigMap to retrieve ControlPlane info")
@@ -85,6 +89,7 @@ func main() {
 	rootCmd.Flags().IPSlice("cloud-int-lb-ips", nil, "IP Addresses of Cloud Internal Load Balancers for OpenShift Internal API")
 	rootCmd.Flags().IPSlice("cloud-ingress-lb-ips", nil, "IP Addresses of Cloud Ingress Load Balancers")
 	rootCmd.Flags().StringP("platform", "p", "", "Cluster Platform")
+	rootCmd.Flags().Bool("block-external-dns", false, "Enable blocking external DNS access to CoreDNS (BlockExternalDNSAccess feature gate)")
 
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatalf("Failed due to %s", err)

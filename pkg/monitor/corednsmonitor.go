@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/baremetal-runtimecfg/pkg/config"
 	"github.com/openshift/baremetal-runtimecfg/pkg/nodeconfig"
 	"github.com/openshift/baremetal-runtimecfg/pkg/render"
@@ -18,7 +19,7 @@ import (
 
 const resolvConfFilepath string = "/var/run/NetworkManager/resolv.conf"
 
-func CorednsWatch(kubeconfigPath, clusterConfigPath, templatePath, cfgPath string, apiVips, ingressVips []net.IP, interval time.Duration, apiLBIPs, apiIntLBIPs, ingressLBIPs []net.IP, platformType string) error {
+func CorednsWatch(kubeconfigPath, clusterConfigPath, templatePath, cfgPath string, apiVips, ingressVips []net.IP, interval time.Duration, apiLBIPs, apiIntLBIPs, ingressLBIPs []net.IP, platformType string, blockExternalDNS bool) error {
 	signals := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
 
@@ -30,6 +31,12 @@ func CorednsWatch(kubeconfigPath, clusterConfigPath, templatePath, cfgPath strin
 	signal.Notify(signals, syscall.SIGINT)
 	go func() {
 		<-signals
+		if blockExternalDNS {
+			if err := cleanCoreDNSFirewallRules(); err != nil {
+				log.WithFields(logrus.Fields{"err": err}).Error(
+					"Failed to clean CoreDNS firewall rules on shutdown")
+			}
+		}
 		cancel() // Cancel the context for node watcher
 		done <- true
 	}()
@@ -50,6 +57,9 @@ func CorednsWatch(kubeconfigPath, clusterConfigPath, templatePath, cfgPath strin
 	for {
 		select {
 		case <-done:
+			if blockExternalDNS {
+				cleanCoreDNSFirewallRules()
+			}
 			return nil
 		default:
 			curMD5, err := utils.GetFileMd5(resolvConfFilepath)
@@ -108,6 +118,29 @@ func CorednsWatch(kubeconfigPath, clusterConfigPath, templatePath, cfgPath strin
 			}
 			prevMD5 = curMD5
 			prevConfig = newConfig
+
+			if blockExternalDNS {
+				policy, err := getExternalDNSAccessPolicy(kubeconfigPath)
+				if err != nil {
+					log.WithFields(logrus.Fields{"err": err}).Warn(
+						"Failed to read externalDNSAccessPolicy, defaulting to Deny")
+					policy = configv1.ExternalDNSAccessPolicyDeny
+				}
+
+				switch policy {
+				case configv1.ExternalDNSAccessPolicyAllow:
+					if err := cleanCoreDNSFirewallRules(); err != nil {
+						log.WithFields(logrus.Fields{"err": err}).Error(
+							"Failed to remove CoreDNS firewall rules")
+					}
+				default:
+					if err := ensureCoreDNSFirewallRules(); err != nil {
+						log.WithFields(logrus.Fields{"err": err}).Error(
+							"Failed to ensure CoreDNS firewall rules")
+					}
+				}
+			}
+
 			time.Sleep(interval)
 		}
 	}
